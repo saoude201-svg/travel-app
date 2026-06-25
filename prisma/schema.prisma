@@ -1,0 +1,274 @@
+// Wanderlust data model.
+// Prisma 7 "Rust-free" client: queries run through a driver adapter (pg).
+// See src/lib/db.ts for the client instantiation.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Auth.js (NextAuth) models
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String? // null for OAuth-only users
+  role          UserRole  @default(USER)
+
+  accounts    Account[]
+  sessions    Session[]
+  suggestions Suggestion[]
+  bookings    Booking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------------------------------------------------------------------------
+// Travel domain
+// ---------------------------------------------------------------------------
+
+enum Vibe {
+  BEACH
+  CITY
+  CULTURE
+  ADVENTURE
+  RELAX
+}
+
+model Destination {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  country     String
+  region      String?
+  description String
+  heroImage   String
+  latitude    Float
+  longitude   Float
+  vibes       Vibe[]
+  bestSeason  String
+  avgDailyBudgetCents Int // rough per-person daily on-the-ground budget
+
+  hotels Hotel[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([country])
+}
+
+model Hotel {
+  id            String   @id @default(cuid())
+  slug          String   @unique
+  destinationId String
+  name          String
+  description   String
+  address       String
+  starRating    Int // 1-5
+  guestRating   Float // 0-10
+  reviewCount   Int      @default(0)
+  images        String[]
+  amenities     String[]
+  latitude      Float
+  longitude     Float
+  freeCancellation Boolean @default(true)
+  // Lowest nightly rate in cents — denormalized for fast search/sort.
+  basePriceCents Int
+
+  destination Destination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  roomTypes   RoomType[]
+  reviews     Review[]
+  bookings    Booking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([destinationId])
+  @@index([starRating])
+  @@index([basePriceCents])
+}
+
+model RoomType {
+  id            String   @id @default(cuid())
+  hotelId       String
+  name          String
+  description   String
+  maxOccupancy  Int
+  bedConfig     String
+  sizeSqm       Int?
+  pricePerNightCents Int
+  totalRooms    Int      @default(10) // available inventory for mock availability
+  amenities     String[]
+  images        String[]
+  refundable    Boolean  @default(true)
+
+  hotel    Hotel     @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+
+  @@index([hotelId])
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  hotelId   String
+  author    String
+  rating    Float // 0-10
+  title     String
+  body      String
+  stayDate  DateTime
+  createdAt DateTime @default(now())
+
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  @@index([hotelId])
+}
+
+model Suggestion {
+  id        String   @id @default(cuid())
+  userId    String?
+  // The structured input used to generate this suggestion set.
+  input     Json
+  // The validated AI output (array of destination suggestions).
+  results   Json
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Bookings & payments
+// ---------------------------------------------------------------------------
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  FAILED
+}
+
+enum PaymentStatus {
+  REQUIRES_PAYMENT
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+model Booking {
+  id         String        @id @default(cuid())
+  reference  String        @unique // human-friendly confirmation code
+  userId     String
+  hotelId    String
+  roomTypeId String
+  status     BookingStatus @default(PENDING)
+
+  checkIn  DateTime
+  checkOut DateTime
+  nights   Int
+  rooms    Int
+  guests   Int
+
+  // Server-authoritative price breakdown (cents). Never trust the client.
+  roomSubtotalCents Int
+  taxesCents        Int
+  feesCents         Int
+  totalCents        Int
+  currency          String @default("USD")
+
+  guestFirstName String
+  guestLastName  String
+  guestEmail     String
+  guestPhone     String?
+  specialRequests String?
+
+  // Snapshot of the cancellation policy at booking time.
+  freeCancellation     Boolean   @default(true)
+  cancellationDeadline DateTime?
+  cancelledAt          DateTime?
+
+  // Reference returned by the hotel provider adapter.
+  providerBookingId String?
+
+  payment Payment?
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  hotel    Hotel    @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+  roomType RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Payment {
+  id        String        @id @default(cuid())
+  bookingId String        @unique
+  status    PaymentStatus @default(REQUIRES_PAYMENT)
+  amountCents Int
+  currency  String        @default("USD")
+
+  stripePaymentIntentId String? @unique
+  stripeClientSecret    String?
+  // Idempotency key used when creating the PaymentIntent.
+  idempotencyKey        String? @unique
+  lastError             String?
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
