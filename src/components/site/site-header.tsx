@@ -2,10 +2,15 @@ import Link from "next/link";
 import { Compass } from "lucide-react";
 import { brand } from "@/design/tokens";
 import { Button } from "@/components/ui/button";
+import { UserMenu } from "@/components/site/user-menu";
+import { getCurrentUser } from "@/lib/session";
 
-// Auth-aware controls are injected via the `account` slot so this stays a
-// pure presentational shell (the session is read in the layout, Phase 3).
-export function SiteHeader({ account }: { account?: React.ReactNode }) {
+export async function SiteHeader() {
+  const user = await getCurrentUser();
+  const account = user ? (
+    <UserMenu name={user.name} email={user.email} image={user.image} role={user.role} />
+  ) : null;
+
   return (
     <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container-page flex h-16 items-center justify-between gap-4">
